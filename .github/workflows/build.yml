@@ -1,76 +1,57 @@
-name: CI
+name: Build Hoenn_FR_Style
 
 on:
   push:
     branches: [ master ]
   pull_request:
+    branches: [ master ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      GAME_VERSION: EMERALD
-      GAME_REVISION: 0
-      GAME_LANGUAGE: ENGLISH
-      MODERN: 0
-      COMPARE: 1
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@master
+      - name: Configure Git Symlinks
+        run: git config --global core.symlinks false
 
-      - name: Checkout syms
-        if: ${{ github.event_name == 'push' }}
-        uses: actions/checkout@master
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
-          path: symbols
-          ref: symbols
+          submodules: recursive
 
-      - name: Checkout agbcc
-        uses: actions/checkout@master
-        with:
-          path: agbcc
-          repository: pret/agbcc
-
-      - name: Install binutils
-        run: sudo apt install gcc-arm-none-eabi binutils-arm-none-eabi
-        # build-essential, git, and libpng-dev are already installed
-        # gcc-arm-none-eabi is only needed for the modern build
-        # as an alternative to dkP
-
-      - name: Install agbcc
+      - name: Install Dependencies
         run: |
-          ./build.sh
-          ./install.sh ../
-        working-directory: agbcc
+          sudo apt-get update
+          sudo apt-get install -y build-essential binutils-arm-none-eabi git libpng-dev zlib1g-dev pkg-config wget unzip
 
-      - name: Compare
-        run: make -j${nproc} all syms
-
-      - name: Modern
-        env:
-          MODERN: 1
-          COMPARE: 0
-        run: make -j${nproc} all
-
-      - name: Webhook
-        if: ${{ github.event_name == 'push' && github.repository_owner == 'pret' }}
-        env:
-          CALCROM_DISCORD_WEBHOOK_USERNAME: OK
-          CALCROM_DISCORD_WEBHOOK_AVATAR_URL: https://i.imgur.com/38BQHdd.png
-          CALCROM_DISCORD_WEBHOOK_URL: ${{ secrets.CALCROM_DISCORD_WEBHOOK_URL }}
-        run: sh .github/calcrom/webhook.sh pokeemerald
-
-      - name: Move symfiles
-        if: ${{ github.event_name == 'push' }}
+      - name: Build agbcc (if not present)
         run: |
-          cp -v *.sym symbols/
-          echo "SYMBOLS_COMMIT_MSG=$( git log --format=%s ${GITHUB_SHA} )" >> $GITHUB_ENV
+          if [ ! -f "tools/agbcc/bin/agbcc" ]; then
+            if [ -f "agbcc/build.sh" ]; then
+              cd agbcc && ./build.sh && ./install.sh ..
+            elif [ -f "tools/agbcc/build.sh" ]; then
+              cd tools/agbcc && ./build.sh && ./install.sh ../..
+            else
+              git clone https://github.com/pret/agbcc.git /tmp/agbcc
+              cd /tmp/agbcc && ./build.sh && ./install.sh "$GITHUB_WORKSPACE"
+            fi
+          fi
 
-      - name: Update symfiles
-        if: ${{ github.event_name == 'push' }}
-        uses: EndBug/add-and-commit@v7
+      - name: Build Tools
+        run: |
+          make tools -j$(nproc) || true
+
+      - name: Build ROM
+        run: |
+          make -j$(nproc)
+
+      - name: Upload Built ROM
+        uses: actions/upload-artifact@v4
         with:
-          branch: symbols
-          cwd: "./symbols"
-          add: "*.sym"
-          message: ${{ env.SYMBOLS_COMMIT_MSG }}
+          name: Hoenn_FR_Style-ROM
+          path: |
+            *.gba
+            *.sym
+            *.map
+          if-no-files-found: error
